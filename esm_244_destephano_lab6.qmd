@@ -1,0 +1,145 @@
+---
+title: "DeStephano_244_lab6_exercise"
+format: 
+  html:
+    embed-resources: true
+    code-fold: show
+execute:
+  message: false
+  warning: false
+---
+
+## load libraries and data
+
+```{r}
+library(tidymodels)
+library(tidyverse)
+library(ggcorrplot)
+library(knitr)
+library(kableExtra)
+
+energy<-read_csv(here::here('data','Energy_consumption_dataset.csv')) |> 
+  janitor::clean_names()
+                 
+energy$month<-as.factor(energy$month)
+energy$hour<-as.factor(energy$hour)
+
+
+```
+
+## Build Random Forests
+
+```{r}
+set.seed(123)
+
+energy_split <- initial_split(energy, prop = 0.75)
+
+energy_train <- training(energy_split)
+
+energy_test <- testing(energy_split)
+```
+
+### Build recipe
+
+```{r}
+energy_recipe <- recipe(energy_consumption ~ ., data = energy_train) |> 
+  step_zv(all_predictors()) |> 
+  step_corr(all_numeric(), threshold = 0.9)
+```
+
+### Set Engine
+
+We'll use the `ranger` engine for this model. It is a fast implementation of random forests. We have to tell R here that we plan to tune our parameters. The `tune()` function tells tidymodels to be ready to recieve a combination of different parameters. We can also set the workflow in this instance as well.
+
+```{r}
+rf_spec <- rand_forest(trees = 1000, 
+                       mtry = tune(),
+                       min_n=tune()) |>
+  set_engine("ranger") |>
+  set_mode("regression")
+
+rf_workflow <- workflow() |>
+  add_recipe(energy_recipe) |>
+  add_model(rf_spec)
+```
+
+### Hyperparameter tuning
+
+R can use defaults to create reasonable grid, but let's make a manual grid in case you need to adjust the parameters on your own in the future. The `expand_grid` function is a great way to create a grid of all possible combinations of parameters. We'll use the `tune_grid` function to test all these combinations. We'll use 5 fold cross validation to test the model.
+
+```{r}
+rf_grid= expand_grid(
+  mtry = seq(1,6,by=2),
+  min_n = 2
+)
+
+rf_res <- tune_grid(
+  rf_workflow,
+  resamples = vfold_cv(energy_train, v = 5),
+  grid = rf_grid,
+  control=control_grid(save_workflow = TRUE)  # This is useful when finalizing the model
+)
+```
+
+How did the model performance change with different parameters?
+
+```{r}
+#| label: fig-tune
+#| fig-cap: "The AUC of the model is highest when mtry is 3 and min_n is 2. The model is relatively stable across all parameters."
+
+rf_res %>%
+  collect_metrics() %>%
+  filter(.metric == "roc_auc") %>%
+  mutate(min_n = factor(min_n)) %>%
+  ggplot(aes(mtry, mean, color = min_n)) +
+  geom_line(alpha = 0.5, linewidth = 1.5) +
+  geom_point() +
+  labs(y = "AUC")
+```
+
+```{r}
+#| label: fig-tune
+#| fig-cap: "The AUC of the model is highest when mtry is 3 and min_n is 2. The model is relatively stable across all parameters."
+
+rf_res %>%
+  collect_metrics() %>%
+  filter(.metric == "rmse") %>%
+  mutate(min_n = factor(min_n)) %>%
+  ggplot(aes(mtry, mean, color = min_n)) +
+  geom_line(alpha = 0.5, linewidth = 1.5) +
+  geom_point() +
+  labs(y = "rmse")
+```
+
+## Finalize Model
+
+```{r}
+rf_best<-select_best(rf_res,metric='rmse')
+
+rf_final<-finalize_model(rf_spec,rf_best)
+
+# finalize workflow
+
+final_wf <- workflow() %>%
+  add_recipe(energy_recipe) %>%
+  add_model(rf_final)
+
+final_res <- final_wf %>%
+  last_fit(energy_split)
+
+final_res %>%
+  collect_metrics() %>%
+  filter(.metric == "rmse" | .metric == "accuracy") |> 
+  select(.metric,.estimate) |>
+  kable(col.names = c('Metric','Value')) |> 
+  kable_styling()
+
+rf_final |>
+  set_engine('ranger',importance='permutation') |> 
+  fit(energy_consumption~.,
+      data=juice(prep(energy_recipe))) |> #prepping and juicing turns what you did into an actual data frame
+  vip::vip(geom='point')
+```
+
+
+

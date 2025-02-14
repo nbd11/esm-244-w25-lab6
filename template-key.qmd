@@ -31,7 +31,7 @@ Variables:
 1. Age, age of mother while pregnant 
 2. systolic_bp, Upp veral of blood pressure in mmHg
 3. diastolic_bp, Lower veral of blood pressure in mmHg
-4. bs, blood clucose levels in mmol/l
+4. bs, blood glucose levels in mmol/l
 5. body_temp, in degrees F
 6. heart_rate, resting heart rate in bpm
 
@@ -226,7 +226,7 @@ We take our finalized model and add the measure of importance we want to evaluat
 rf_final |>
   set_engine('ranger',importance='permutation') |> 
   fit(risk_level~.,
-      data=juice(prep(mom_recipe))) |> 
+      data=juice(prep(mom_recipe))) |> #prepping and juicing turns what you did into an actual data frame
   vip::vip(geom='point')
 
 ```
